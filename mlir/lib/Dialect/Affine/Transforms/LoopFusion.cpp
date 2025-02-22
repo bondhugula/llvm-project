@@ -1163,6 +1163,41 @@ public:
       if (maxLegalFusionDepth == 0)
         continue;
 
+      double computeToleranceThresholdToUse = computeToleranceThreshold;
+
+      // Cyclic dependences in the source nest may be violated when performing
+      // slicing-based fusion. They aren't actually violated in cases where no
+      // redundant execution of the source happens (1:1 pointwise dep on the
+      // producer-consumer memref access for example). Check this and allow
+      // fusion accordingly.
+      if (hasCyclicDependence(sibAffineForOp)) {
+        LLVM_DEBUG(llvm::dbgs() << "Source nest has a cyclic dependence.\n");
+        // Maximal fusion does not check for compute tolerance threshold; so
+        // perform the maximal fusion only when the redundanation computation is
+        // zero.
+        if (maximalFusion) {
+          auto dstForOp = cast<AffineForOp>(dstNode->op);
+          int64_t sliceCost;
+          int64_t fusedLoopNestComputeCost;
+          auto fraction = getAdditionalComputeFraction(
+              sibAffineForOp, dstForOp, maxLegalFusionDepth, {},
+              depthSliceUnions, {}, sliceCost, fusedLoopNestComputeCost);
+          if (!fraction || fraction > 0) {
+            LLVM_DEBUG(
+                llvm::dbgs()
+                << "Can't perform maximal fusion with a cyclic dependence "
+                   "and non-zero additional compute.\n");
+            return;
+          }
+        } else {
+          // Set redundant computation tolerance to zero regardless of what the
+          // user specified. Without this, fusion would be invalid.
+          LLVM_DEBUG(llvm::dbgs() << "Setting compute tolerance to zero since "
+                                     "source has a cylic dependence.\n");
+          computeToleranceThresholdToUse = 0.0;
+        }
+      }
+
       unsigned bestDstLoopDepth = maxLegalFusionDepth;
       if (!maximalFusion) {
         // Check if fusion would be profitable. For sibling fusion, the sibling
